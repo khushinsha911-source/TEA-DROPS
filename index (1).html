@@ -1,0 +1,1118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>TEA — Inner Circle Live Cloud Vault</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Gun.js Decentralized Real-Time P2P Sync (Zero Config Required) -->
+  <script src="https://cdn.jsdelivr.net/npm/gun/gun.js"></script>
+  <style>
+    .scrollbar-none::-webkit-scrollbar { display: none; }
+    .scrollbar-none { -ms-overflow-style: none; scrollbar-width: none; }
+    @keyframes slideDown {
+      from { transform: translateY(-20px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+    .animate-slide-down { animation: slideDown 0.3s ease-out forwards; }
+  </style>
+</head>
+<body class="bg-[#0E0617] text-white antialiased selection:bg-[#D4FF00] selection:text-black">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo, useRef } = React;
+
+    // Connect to public WebRTC/Gun relay peers for instant cross-device room sync
+    const gun = Gun({
+      peers: [
+        'https://gun-manhattan.herokuapp.com/gun',
+        'https://relay.peer.ooo/gun',
+        'https://peer.wallie.io/gun'
+      ]
+    });
+
+    const DEMO_FOLDERS = [
+      { id: 'f1', name: 'College Chronicles', icon: '🎓', desc: 'Canteen conspiracies & late night hostel heists' },
+      { id: 'f2', name: 'Office Diaries', icon: '💼', desc: 'Slack drama, microwave fish offenders & appraisal rage' },
+      { id: 'f3', name: 'The Wedding Files', icon: '💍', desc: 'Sangeet backstabbing & choreographed vengeance' },
+      { id: 'f4', name: 'Plot Twists', icon: '🌪️', desc: 'Nobody could have scripted this even on Netflix' },
+      { id: 'f5', name: 'People Being People', icon: '🤡', desc: 'Unbelievable public audacity caught in 4K' }
+    ];
+
+    const AVATAR_PRESETS = [
+      'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&auto=format&fit=crop&q=80',
+      'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=300&auto=format&fit=crop&q=80',
+      'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300&auto=format&fit=crop&q=80',
+      'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=300&auto=format&fit=crop&q=80',
+      'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=300&auto=format&fit=crop&q=80',
+      'https://images.unsplash.com/photo-1524504388940-b1c1722653e1?w=300&auto=format&fit=crop&q=80'
+    ];
+
+    function App() {
+      // Circle Room Code (can be shared via URL ?circle=chatpatizindagi)
+      const [circleCode, setCircleCode] = useState(() => {
+        const params = new URLSearchParams(window.location.search);
+        return params.get('circle') || localStorage.getItem('tea_circle_code') || 'chatpatizindagi';
+      });
+
+      const [stories, setStories] = useState([]);
+      const [characters, setCharacters] = useState([]);
+      const [scrapbook, setScrapbook] = useState([]);
+      const [folders, setFolders] = useState(DEMO_FOLDERS);
+      const [firebaseDbUrl, setFirebaseDbUrl] = useState(() => localStorage.getItem('tea_fb_url') || '');
+      const [showSyncModal, setShowSyncModal] = useState(false);
+
+      // Member Profile
+      const [memberProfile, setMemberProfile] = useState(() => {
+        const saved = localStorage.getItem('tea_member_profile');
+        return saved ? JSON.parse(saved) : {
+          name: '',
+          handle: '',
+          role: 'Inner Circle Detective',
+          avatar: AVATAR_PRESETS[0],
+          bio: '"I don’t look for drama, the drama requests my location."'
+        };
+      });
+      const [showIdentityModal, setShowIdentityModal] = useState(() => !localStorage.getItem('tea_member_profile'));
+
+      // Navigation & UI
+      const [activeTab, setActiveTab] = useState('archive');
+      const [isMobileFrame, setIsMobileFrame] = useState(true);
+      const [searchQuery, setSearchQuery] = useState('');
+      const [selectedFolderFilter, setSelectedFolderFilter] = useState('All');
+
+      // Modals
+      const [selectedCharacter, setSelectedCharacter] = useState(null);
+      const [selectedVaultFolder, setSelectedVaultFolder] = useState(null);
+      const [showWebModal, setShowWebModal] = useState(false);
+      const [showZineModal, setShowZineModal] = useState(false);
+      const [showSpillSuccess, setShowSpillSuccess] = useState(false);
+      const [showAddSuspectModal, setShowAddSuspectModal] = useState(false);
+      const [showAddFolderModal, setShowAddFolderModal] = useState(false);
+      const [showAddPolaroidModal, setShowAddPolaroidModal] = useState(false);
+
+      // Notifications & Audio
+      const [liveAlert, setLiveAlert] = useState(null);
+      const [soundEnabled, setSoundEnabled] = useState(true);
+      const seenStoryIds = useRef(new Set());
+      const initialLoadDone = useRef(false);
+
+      const playChime = () => {
+        if (!soundEnabled) return;
+        try {
+          const ctx = new (window.AudioContext || window.webkitAudioContext)();
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(880, ctx.currentTime);
+          osc.frequency.exponentialRampToValueAtTime(1320, ctx.currentTime + 0.18);
+          gain.gain.setValueAtTime(0.14, ctx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.38);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start();
+          osc.stop(ctx.currentTime + 0.38);
+        } catch (e) {}
+      };
+
+      const triggerAlert = (author, topic, folder) => {
+        playChime();
+        setLiveAlert({ author, topic, folder });
+        if ('Notification' in window && Notification.permission === 'granted') {
+          new Notification(`🫖 Fresh Tea in ${folder}!`, {
+            body: `${author} spilled: "${topic}"`
+          });
+        }
+        setTimeout(() => setLiveAlert(null), 5500);
+      };
+
+      // --- REAL-TIME MULTI-PHONE SYNC ENGINE ---
+      useEffect(() => {
+        localStorage.setItem('tea_circle_code', circleCode);
+        const roomKey = `tea_vault_2026_${circleCode.toLowerCase().trim()}`;
+        const room = gun.get(roomKey);
+
+        // Allow 1.5s for initial history load before ringing notifications on new incoming items
+        initialLoadDone.current = false;
+        const timer = setTimeout(() => { initialLoadDone.current = true; }, 1800);
+
+        // 1. Sync Stories
+        room.get('stories').map().on((data, id) => {
+          if (!data) {
+            setStories(prev => prev.filter(s => s.id !== id));
+            return;
+          }
+          try {
+            const parsed = typeof data.json === 'string' ? JSON.parse(data.json) : data;
+            if (!parsed || !parsed.topicHeader) return;
+
+            setStories(prev => {
+              const exists = prev.some(s => s.id === parsed.id);
+              if (!exists && initialLoadDone.current && !seenStoryIds.current.has(parsed.id)) {
+                seenStoryIds.current.add(parsed.id);
+                if (parsed.author !== memberProfile.name) {
+                  triggerAlert(parsed.author, parsed.topicHeader, parsed.folder);
+                }
+              }
+              seenStoryIds.current.add(parsed.id);
+              const filtered = prev.filter(s => s.id !== parsed.id);
+              return [parsed, ...filtered].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+            });
+          } catch (e) {}
+        });
+
+        // 2. Sync Suspects / Characters
+        room.get('characters').map().on((data, id) => {
+          if (!data) return;
+          try {
+            const parsed = typeof data.json === 'string' ? JSON.parse(data.json) : data;
+            if (!parsed || !parsed.name) return;
+            setCharacters(prev => {
+              const filtered = prev.filter(c => c.id !== parsed.id);
+              return [parsed, ...filtered];
+            });
+          } catch (e) {}
+        });
+
+        // 3. Sync Folders
+        room.get('folders').map().on((data, id) => {
+          if (!data) return;
+          try {
+            const parsed = typeof data.json === 'string' ? JSON.parse(data.json) : data;
+            if (!parsed || !parsed.name) return;
+            setFolders(prev => {
+              const filtered = prev.filter(f => f.id !== parsed.id && f.name !== parsed.name);
+              return [...filtered, parsed];
+            });
+          } catch (e) {}
+        });
+
+        // 4. Sync Scrapbook Polaroids
+        room.get('scrapbook').map().on((data, id) => {
+          if (!data) return;
+          try {
+            const parsed = typeof data.json === 'string' ? JSON.parse(data.json) : data;
+            if (!parsed || !parsed.caption) return;
+            setScrapbook(prev => {
+              const filtered = prev.filter(s => s.id !== parsed.id);
+              return [parsed, ...filtered].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+            });
+          } catch (e) {}
+        });
+
+        return () => clearTimeout(timer);
+      }, [circleCode]);
+
+      // Helper to broadcast item to shared cloud room
+      const syncToCircle = (collection, item) => {
+        const roomKey = `tea_vault_2026_${circleCode.toLowerCase().trim()}`;
+        gun.get(roomKey).get(collection).get(item.id).put({ json: JSON.stringify(item) });
+
+        // Also mirror to optional Firebase Realtime DB URL if user provided one
+        if (firebaseDbUrl.trim()) {
+          const cleanUrl = firebaseDbUrl.trim().replace(/\/$/, '');
+          fetch(`${cleanUrl}/${circleCode}/${collection}/${item.id}.json`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(item)
+          }).catch(() => {});
+        }
+      };
+
+      // Optional Firebase polling listener if user linked a Firebase Realtime DB URL
+      useEffect(() => {
+        if (!firebaseDbUrl.trim()) return;
+        const cleanUrl = firebaseDbUrl.trim().replace(/\/$/, '');
+        const interval = setInterval(async () => {
+          try {
+            const res = await fetch(`${cleanUrl}/${circleCode}.json`);
+            const data = await res.json();
+            if (!data) return;
+            if (data.stories) {
+              const list = Object.values(data.stories).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+              setStories(list);
+            }
+            if (data.characters) setCharacters(Object.values(data.characters));
+            if (data.scrapbook) setScrapbook(Object.values(data.scrapbook));
+          } catch (e) {}
+        }, 3500);
+        return () => clearInterval(interval);
+      }, [firebaseDbUrl, circleCode]);
+
+      // Forms
+      const [formTopic, setFormTopic] = useState('');
+      const [formCharName, setFormCharName] = useState('');
+      const [formFolder, setFormFolder] = useState('');
+      const [formTags, setFormTags] = useState(['Villain Era']);
+      const [formContent, setFormContent] = useState('');
+      const [formGhostMode, setFormGhostMode] = useState(false);
+      const [formMediaUrl, setFormMediaUrl] = useState('');
+
+      const [newCharName, setNewCharName] = useState('');
+      const [newCharNickname, setNewCharNickname] = useState('');
+      const [newCharArchetype, setNewCharArchetype] = useState('Mastermind Chaos');
+      const [newCharAvatar, setNewCharAvatar] = useState(AVATAR_PRESETS[1]);
+      const [newCharBio, setNewCharBio] = useState('');
+      const [newCharQuote, setNewCharQuote] = useState('');
+
+      const [newFolderName, setNewFolderName] = useState('');
+      const [newFolderIcon, setNewFolderIcon] = useState('🤫');
+      const [newFolderDesc, setNewFolderDesc] = useState('');
+
+      const [newSnapCaption, setNewSnapCaption] = useState('');
+      const [newSnapLocation, setNewSnapLocation] = useState('');
+      const [newSnapImage, setNewSnapImage] = useState('https://images.unsplash.com/photo-1517457373958-b7bdd4587205?w=600&auto=format&fit=crop&q=80');
+
+      const handleSaveIdentity = (e) => {
+        e.preventDefault();
+        const profile = {
+          name: memberProfile.name.trim() || 'Insha',
+          handle: memberProfile.handle.trim() || '@inshaa',
+          role: memberProfile.role || 'Inner Circle Detective',
+          avatar: memberProfile.avatar || AVATAR_PRESETS[0],
+          bio: memberProfile.bio || '"I don’t look for drama, the drama requests my location."'
+        };
+        setMemberProfile(profile);
+        localStorage.setItem('tea_member_profile', JSON.stringify(profile));
+        setShowIdentityModal(false);
+      };
+
+      const handleReaction = (storyId, key) => {
+        const target = stories.find(s => s.id === storyId);
+        if (!target) return;
+        const updated = {
+          ...target,
+          reactions: { ...target.reactions, [key]: ((target.reactions && target.reactions[key]) || 0) + 1 }
+        };
+        setStories(prev => prev.map(s => s.id === storyId ? updated : s));
+        syncToCircle('stories', updated);
+      };
+
+      const togglePin = (storyId) => {
+        const target = stories.find(s => s.id === storyId);
+        if (!target) return;
+        const updated = { ...target, pinned: !target.pinned };
+        setStories(prev => prev.map(s => s.id === storyId ? updated : s));
+        syncToCircle('stories', updated);
+      };
+
+      const submitTea = (e) => {
+        e.preventDefault();
+        if (!formTopic.trim() || !formContent.trim()) return;
+        const chosenChar = characters.find(c => c.id === formCharName) || characters[0] || { id: 'c_custom', name: 'Mystery Suspect' };
+        const chosenFolder = formFolder || (folders[0] ? folders[0].name : 'College Chronicles');
+        const authorName = formGhostMode ? 'GhostBarista' : (memberProfile.name || 'Insha');
+
+        const newStory = {
+          id: 's_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+          createdAt: Date.now(),
+          topicHeader: formTopic.trim(),
+          characterId: chosenChar.id,
+          characterName: chosenChar.name,
+          folder: chosenFolder,
+          date: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          tags: formTags.length ? formTags : ['Spill'],
+          content: formContent.trim(),
+          isGhost: formGhostMode,
+          author: authorName,
+          pinned: false,
+          media: formMediaUrl.trim() || null,
+          reactions: { spill: 1, receipts: 0, gasp: 0, cap: 0, watching: 1 }
+        };
+
+        seenStoryIds.current.add(newStory.id);
+        setStories(prev => [newStory, ...prev]);
+        syncToCircle('stories', newStory);
+        triggerAlert(authorName, newStory.topicHeader, chosenFolder);
+
+        setShowSpillSuccess(true);
+        setTimeout(() => {
+          setShowSpillSuccess(false);
+          setActiveTab('archive');
+          setFormTopic('');
+          setFormContent('');
+          setFormMediaUrl('');
+        }, 1000);
+      };
+
+      const handleAddSuspect = (e) => {
+        e.preventDefault();
+        if (!newCharName.trim()) return;
+        const newChar = {
+          id: 'c_' + Date.now(),
+          createdAt: Date.now(),
+          name: newCharName.trim(),
+          nickname: newCharNickname.trim() || 'The Suspect',
+          avatar: newCharAvatar,
+          archetype: newCharArchetype,
+          bio: newCharBio.trim() || 'Under active surveillance by the inner circle.',
+          quote: `"${newCharQuote.trim() || 'No comment without my lawyer.'}"`
+        };
+        setCharacters(prev => [newChar, ...prev]);
+        syncToCircle('characters', newChar);
+        setNewCharName('');
+        setNewCharNickname('');
+        setNewCharBio('');
+        setNewCharQuote('');
+        setShowAddSuspectModal(false);
+      };
+
+      const handleAddFolder = (e) => {
+        e.preventDefault();
+        if (!newFolderName.trim()) return;
+        const nf = {
+          id: 'f_' + Date.now(),
+          name: newFolderName.trim(),
+          icon: newFolderIcon || '📁',
+          desc: newFolderDesc.trim() || 'Confidential incident collection'
+        };
+        setFolders(prev => [...prev, nf]);
+        syncToCircle('folders', nf);
+        setNewFolderName('');
+        setNewFolderDesc('');
+        setShowAddFolderModal(false);
+      };
+
+      const handleAddPolaroid = (e) => {
+        e.preventDefault();
+        if (!newSnapCaption.trim()) return;
+        const snap = {
+          id: 'sc_' + Date.now(),
+          createdAt: Date.now(),
+          image: newSnapImage.trim() || 'https://images.unsplash.com/photo-1517457373958-b7bdd4587205?w=600&auto=format&fit=crop&q=80',
+          caption: newSnapCaption.trim(),
+          location: newSnapLocation.trim() || 'Undisclosed Location',
+          date: 'Today',
+          author: memberProfile.name || 'Insha',
+          likes: 1,
+          rotation: Math.random() > 0.5 ? 'rotate-1' : '-rotate-1'
+        };
+        setScrapbook(prev => [snap, ...prev]);
+        syncToCircle('scrapbook', snap);
+        setNewSnapCaption('');
+        setNewSnapLocation('');
+        setShowAddPolaroidModal(false);
+      };
+
+      const copyShareLink = () => {
+        const url = `${window.location.origin}${window.location.pathname}?circle=${encodeURIComponent(circleCode)}`;
+        navigator.clipboard.writeText(url);
+        triggerAlert('Invite Link Copied!', `Room #${circleCode} ready to paste in WhatsApp`, 'Live Sync');
+      };
+
+      const filteredStories = useMemo(() => {
+        const sorted = [...stories].sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
+        return sorted.filter(story => {
+          const matchesSearch = (story.topicHeader || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+                                (story.content || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+                                (story.characterName || '').toLowerCase().includes(searchQuery.toLowerCase());
+          const matchesFolder = selectedFolderFilter === 'All' || story.folder === selectedFolderFilter;
+          return matchesSearch && matchesFolder;
+        });
+      }, [stories, searchQuery, selectedFolderFilter]);
+
+      return (
+        <div className="min-h-screen bg-[#0E0617] text-white flex flex-col items-center justify-start p-0 md:p-4 font-sans select-none">
+          {/* Desktop Bar */}
+          <header className="w-full max-w-xl hidden md:flex items-center justify-between pb-3 px-2 text-xs text-neutral-400">
+            <div className="flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-[#A3E635] animate-ping"></span>
+              <span className="font-mono font-bold text-neutral-200">LIVE SYNC ROOM: #{circleCode.toUpperCase()}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={copyShareLink}
+                className="px-3 py-1 rounded-full bg-[#D4FF00] text-black font-black text-[11px]"
+              >
+                🔗 Copy Group Invite Link
+              </button>
+              <button
+                onClick={() => setShowSyncModal(true)}
+                className="px-2.5 py-1 rounded-full bg-[#1F0B38] border border-[#A3E635]/40 text-[#A3E635] text-[11px] font-bold"
+              >
+                ⚙️ Change Room Code
+              </button>
+              <button
+                onClick={() => setIsMobileFrame(!isMobileFrame)}
+                className="px-2.5 py-1 rounded-full bg-[#1A0B2E] border border-neutral-700 text-neutral-300 text-[11px]"
+              >
+                {isMobileFrame ? 'Expand View' : 'Phone Frame'}
+              </button>
+            </div>
+          </header>
+
+          {/* Main Shell */}
+          <main className={`w-full transition-all duration-300 relative flex flex-col bg-[#140824] ${
+            isMobileFrame
+              ? 'max-w-[430px] h-[94vh] max-h-[900px] rounded-[42px] border-[7px] border-[#25103F] shadow-2xl overflow-hidden'
+              : 'max-w-2xl min-h-screen md:rounded-3xl border border-[#2A1147]'
+          }`}>
+
+            {/* Dynamic Island */}
+            <div className="w-full pt-2.5 px-6 pb-2 flex items-center justify-between z-30 bg-[#140824]/90 backdrop-blur-md">
+              <span className="text-xs font-semibold text-neutral-300">9:41</span>
+              <div
+                onClick={() => setShowSyncModal(true)}
+                className="cursor-pointer h-5 px-3 bg-black rounded-full flex items-center justify-center gap-1.5 border border-[#A3E635]/50 hover:border-[#D4FF00] transition"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-[#A3E635] animate-ping"></span>
+                <span className="text-[9px] text-[#D4FF00] font-mono font-bold">ROOM: #{circleCode.toUpperCase()}</span>
+              </div>
+              <button
+                onClick={copyShareLink}
+                className="text-[10px] font-bold text-[#A3E635] bg-[#1F0B38] px-2 py-0.5 rounded-md border border-[#A3E635]/30"
+              >
+                Share 🔗
+              </button>
+            </div>
+
+            {/* Live Alert Banner */}
+            {liveAlert && (
+              <div className="mx-4 mt-1 mb-1 p-3 rounded-2xl bg-[#220B3D] border-2 border-[#D4FF00] shadow-2xl z-50 flex items-center justify-between animate-slide-down">
+                <div className="flex items-center gap-2.5">
+                  <span className="text-xl">🫖</span>
+                  <div>
+                    <p className="text-[10px] font-mono uppercase text-[#D4FF00] font-bold">
+                      {liveAlert.folder}
+                    </p>
+                    <p className="text-xs font-extrabold text-white line-clamp-1">
+                      {liveAlert.author}: "{liveAlert.topic}"
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => { setActiveTab('archive'); setLiveAlert(null); }}
+                  className="px-2.5 py-1 rounded-lg bg-[#D4FF00] text-black text-[10px] font-black shrink-0"
+                >
+                  Inspect
+                </button>
+              </div>
+            )}
+
+            {/* Header */}
+            <div className="px-5 py-2.5 flex items-center justify-between border-b border-[#2B124C]">
+              <div className="flex items-center gap-2">
+                <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-[#D4FF00] to-[#A3E635] flex items-center justify-center text-xl shadow-lg">
+                  🫖
+                </div>
+                <div>
+                  <h1 className="text-xl font-black tracking-tight bg-gradient-to-r from-[#D4FF00] via-[#FEF08A] to-[#FF3B30] bg-clip-text text-transparent">
+                    TEA
+                  </h1>
+                  <p className="text-[10px] text-[#A3E635] font-mono -mt-1">
+                    ● Cloud Synced • #{circleCode}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShowWebModal(true)}
+                  className="px-2.5 py-1 rounded-full bg-[#200D38] border border-[#A3E635]/40 text-[#D4FF00] text-[11px] font-semibold"
+                >
+                  🕸️ Web
+                </button>
+                <div onClick={() => setShowIdentityModal(true)} className="relative cursor-pointer">
+                  <div className="w-8 h-8 rounded-full border-2 border-[#D4FF00] overflow-hidden">
+                    <img src={memberProfile.avatar || AVATAR_PRESETS[0]} alt="Avatar" className="w-full h-full object-cover" />
+                  </div>
+                  <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-[#A3E635] rounded-full border border-[#140824]"></span>
+                </div>
+              </div>
+            </div>
+
+            {/* CONTENT */}
+            <div className="flex-1 overflow-y-auto px-4 py-3 pb-24 scrollbar-none">
+              {activeTab === 'archive' && (
+                <div className="space-y-4">
+                  <input
+                    type="text"
+                    placeholder="🔍 Search tea, quotes, suspects..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full bg-[#1F0C38] border border-[#34165C] text-xs rounded-2xl px-4 py-2.5 text-white placeholder-neutral-500 focus:outline-none focus:border-[#D4FF00]"
+                  />
+
+                  {/* Vaults */}
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-400">
+                        📂 Shared Vaults ({folders.length})
+                      </h3>
+                      <button
+                        onClick={() => setShowAddFolderModal(true)}
+                        className="text-[11px] text-[#D4FF00] font-bold bg-[#260E45] px-2.5 py-0.5 rounded-full border border-[#D4FF00]/30"
+                      >
+                        + New Vault
+                      </button>
+                    </div>
+
+                    <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-none">
+                      <button
+                        onClick={() => setSelectedFolderFilter('All')}
+                        className={`px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap border ${
+                          selectedFolderFilter === 'All'
+                            ? 'bg-[#D4FF00] text-black border-[#D4FF00]'
+                            : 'bg-[#1D0C35] text-neutral-300 border-[#321557]'
+                        }`}
+                      >
+                        🔥 All Tea ({stories.length})
+                      </button>
+                      {folders.map(f => (
+                        <button
+                          key={f.id}
+                          onClick={() => setSelectedFolderFilter(selectedFolderFilter === f.name ? 'All' : f.name)}
+                          className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs whitespace-nowrap border ${
+                            selectedFolderFilter === f.name
+                              ? 'bg-[#A3E635] text-black font-bold border-[#A3E635]'
+                              : 'bg-[#1E0C36] text-neutral-200 border-[#33165A]'
+                          }`}
+                        >
+                          <span>{f.icon}</span>
+                          <span>{f.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Stories */}
+                  <div className="space-y-3.5">
+                    {filteredStories.map(story => (
+                      <article key={story.id} className="bg-[#1A0A2F] border border-[#321557] rounded-3xl p-4 shadow-lg">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-1.5">
+                            <span className="bg-[#2D124E] text-[#D4FF00] text-[10px] font-bold px-2.5 py-0.5 rounded-full border border-[#D4FF00]/30">
+                              {story.folder}
+                            </span>
+                            {story.isGhost && (
+                              <span className="bg-[#3D1426] text-[#FF3B30] text-[10px] font-bold px-2 py-0.5 rounded-full">
+                                👻 Ghost Tea
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] text-neutral-400">{story.date}</span>
+                            <button onClick={() => togglePin(story.id)} className={`text-xs ${story.pinned ? 'text-[#D4FF00]' : 'text-neutral-500'}`}>
+                              📌
+                            </button>
+                          </div>
+                        </div>
+
+                        <h2 className="text-base font-extrabold text-white leading-snug">{story.topicHeader}</h2>
+
+                        <div className="flex items-center gap-2 my-2 flex-wrap">
+                          <span className="bg-[#2A1149] px-2.5 py-1 rounded-full border border-neutral-700 text-xs font-bold text-[#FEF08A]">
+                            👤 Suspect: {story.characterName}
+                          </span>
+                          {(story.tags || []).map((t, idx) => (
+                            <span key={idx} className="bg-[#250F3E] text-neutral-300 text-[10px] px-2 py-0.5 rounded-md font-mono">
+                              #{t}
+                            </span>
+                          ))}
+                        </div>
+
+                        <p className="text-xs text-neutral-300 leading-relaxed bg-[#150727]/60 p-3 rounded-2xl border border-[#270E43]">
+                          {story.content}
+                        </p>
+
+                        {story.media && (
+                          <div className="mt-3 relative rounded-2xl overflow-hidden border border-[#3E186D] max-h-48">
+                            <img src={story.media} alt="Receipt" className="w-full h-full object-cover" />
+                          </div>
+                        )}
+
+                        <div className="mt-3 pt-2.5 border-t border-[#2B114D] flex items-center justify-between flex-wrap gap-2">
+                          <div className="flex items-center gap-1.5">
+                            {[
+                              { k: 'spill', e: '🫖', c: 'text-[#D4FF00]' },
+                              { k: 'receipts', e: '🧾', c: 'text-[#A3E635]' },
+                              { k: 'gasp', e: '😱', c: 'text-[#FEF08A]' },
+                              { k: 'cap', e: '🧢', c: 'text-neutral-400' },
+                              { k: 'watching', e: '👀', c: 'text-blue-400' }
+                            ].map(r => (
+                              <button
+                                key={r.k}
+                                onClick={() => handleReaction(story.id, r.k)}
+                                className="flex items-center gap-1 px-2 py-1 rounded-lg bg-[#240E3E] hover:bg-[#341459] border border-neutral-800 text-[11px] active:scale-95 transition"
+                              >
+                                <span>{r.e}</span>
+                                <span className={`font-bold ${r.c}`}>{(story.reactions && story.reactions[r.k]) || 0}</span>
+                              </button>
+                            ))}
+                          </div>
+                          <span className="text-[10px] text-neutral-400">By {story.author}</span>
+                        </div>
+                      </article>
+                    ))}
+
+                    {filteredStories.length === 0 && (
+                      <div className="text-center py-10 px-4 bg-[#1B0A30] rounded-3xl border border-dashed border-[#441C7A]">
+                        <p className="text-3xl mb-2">🫖⚡</p>
+                        <p className="text-sm font-black text-white">Room #{circleCode} is Live & Waiting!</p>
+                        <p className="text-xs text-neutral-400 mt-1 max-w-xs mx-auto">
+                          Anyone who opens this link in Room <strong>#{circleCode}</strong> will see your spilled tea and get live alerts in real time.
+                        </p>
+                        <div className="mt-4 flex items-center justify-center gap-2">
+                          <button
+                            onClick={() => setActiveTab('drop')}
+                            className="px-4 py-2 rounded-xl bg-[#D4FF00] text-black font-black text-xs"
+                          >
+                            + Spill First Tea
+                          </button>
+                          <button
+                            onClick={copyShareLink}
+                            className="px-3 py-2 rounded-xl bg-[#2A1149] text-[#A3E635] font-bold text-xs border border-[#A3E635]/40"
+                          >
+                            🔗 Copy Invite Link
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 2: CAST */}
+              {activeTab === 'characters' && (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h2 className="text-base font-black text-white">The Cast & Dossiers</h2>
+                      <p className="text-xs text-neutral-400">Synced across Room #{circleCode}</p>
+                    </div>
+                    <button
+                      onClick={() => setShowAddSuspectModal(true)}
+                      className="px-3 py-1.5 rounded-xl bg-[#D4FF00] text-black font-extrabold text-xs"
+                    >
+                      + Suspect
+                    </button>
+                  </div>
+
+                  {characters.length === 0 ? (
+                    <div className="text-center py-10 px-4 bg-[#1B0A30] rounded-3xl border border-dashed border-neutral-700">
+                      <p className="text-3xl mb-2">🕵️‍♀️</p>
+                      <p className="text-sm font-bold text-white">No Suspects Filed Yet</p>
+                      <button
+                        onClick={() => setShowAddSuspectModal(true)}
+                        className="mt-3 px-4 py-2 rounded-xl bg-[#D4FF00] text-black font-black text-xs"
+                      >
+                        + Induct First Suspect
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-3">
+                      {characters.map(char => (
+                        <div
+                          key={char.id}
+                          onClick={() => setSelectedCharacter(char)}
+                          className="bg-[#1C0A32] border border-[#371661] hover:border-[#D4FF00] rounded-3xl p-3.5 cursor-pointer"
+                        >
+                          <div className="flex items-start justify-between">
+                            <img src={char.avatar} className="w-14 h-14 rounded-2xl object-cover border-2 border-[#A3E635]" />
+                            <span className="text-[9px] font-mono text-[#D4FF00] bg-[#2E1250] px-2 py-0.5 rounded">
+                              {char.archetype}
+                            </span>
+                          </div>
+                          <h3 className="font-extrabold text-white text-sm mt-3">{char.name}</h3>
+                          <p className="text-[11px] text-[#FEF08A]">"{char.nickname}"</p>
+                          <p className="text-[11px] text-neutral-300 mt-2 line-clamp-2 italic">{char.quote}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* TAB 3: DROP TEA */}
+              {activeTab === 'drop' && (
+                <div className="space-y-4">
+                  <div className="bg-gradient-to-br from-[#230C3E] to-[#18072C] p-4 rounded-3xl border border-[#D4FF00]/30 shadow-xl">
+                    <div className="flex items-center justify-between pb-3 border-b border-[#36155E]">
+                      <div>
+                        <h2 className="text-base font-black text-white">Drop The Tea 🫖</h2>
+                        <p className="text-xs text-[#A3E635]">Broadcasting live to Room #{circleCode}</p>
+                      </div>
+                      <label className="cursor-pointer flex items-center gap-1.5 bg-[#2F1153] px-3 py-1.5 rounded-full border border-neutral-700">
+                        <input
+                          type="checkbox"
+                          checked={formGhostMode}
+                          onChange={(e) => setFormGhostMode(e.target.checked)}
+                          className="hidden"
+                        />
+                        <span className="text-xs">👻</span>
+                        <span className={`text-[11px] font-bold ${formGhostMode ? 'text-[#FF3B30]' : 'text-neutral-400'}`}>
+                          {formGhostMode ? 'Ghost ON' : 'Ghost Mode'}
+                        </span>
+                      </label>
+                    </div>
+
+                    <form onSubmit={submitTea} className="mt-4 space-y-3.5">
+                      <div>
+                        <label className="text-[11px] font-bold text-neutral-300 block mb-1">TOPIC HEADLINE *</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. Caught buying followers live on Zoom"
+                          value={formTopic}
+                          onChange={(e) => setFormTopic(e.target.value)}
+                          required
+                          className="w-full bg-[#18072B] border border-[#3A1667] rounded-xl px-3.5 py-2.5 text-xs text-white"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2.5">
+                        <div>
+                          <label className="text-[11px] font-bold text-neutral-300 block mb-1">SUSPECT</label>
+                          <select
+                            value={formCharName}
+                            onChange={(e) => setFormCharName(e.target.value)}
+                            className="w-full bg-[#18072B] border border-[#3A1667] rounded-xl px-3 py-2 text-xs text-white"
+                          >
+                            {characters.length === 0 && <option value="">Mystery Suspect</option>}
+                            {characters.map(c => (
+                              <option key={c.id} value={c.id}>{c.name} ({c.nickname})</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-[11px] font-bold text-neutral-300 block mb-1">VAULT FOLDER</label>
+                          <select
+                            value={formFolder}
+                            onChange={(e) => setFormFolder(e.target.value)}
+                            className="w-full bg-[#18072B] border border-[#3A1667] rounded-xl px-3 py-2 text-xs text-white"
+                          >
+                            {folders.map(f => (
+                              <option key={f.id} value={f.name}>{f.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="text-[11px] font-bold text-neutral-300 block mb-1">THE SPILL (NARRATIVE) *</label>
+                        <textarea
+                          rows={4}
+                          placeholder="Give context, timestamps, witness statements, and quotes..."
+                          value={formContent}
+                          onChange={(e) => setFormContent(e.target.value)}
+                          required
+                          className="w-full bg-[#18072B] border border-[#3A1667] rounded-2xl p-3 text-xs text-white resize-none"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="text-[11px] font-bold text-neutral-300 block mb-1">MEDIA RECEIPT (IMAGE URL OPTIONAL)</label>
+                        <input
+                          type="url"
+                          placeholder="https://..."
+                          value={formMediaUrl}
+                          onChange={(e) => setFormMediaUrl(e.target.value)}
+                          className="w-full bg-[#18072B] border border-[#3A1667] rounded-xl px-3 py-2 text-xs text-white"
+                        />
+                      </div>
+
+                      <button
+                        type="submit"
+                        className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-[#D4FF00] via-[#A3E635] to-[#D4FF00] text-black font-black text-sm shadow-lg"
+                      >
+                        SPILL TO ROOM #{circleCode.toUpperCase()} 🫖💨
+                      </button>
+                    </form>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 4: SCRAPBOOK */}
+              {activeTab === 'scrapbook' && (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h2 className="text-base font-black text-white">Candid Scrapbook</h2>
+                      <p className="text-xs text-neutral-400">Synced polaroids & group lore</p>
+                    </div>
+                    <button
+                      onClick={() => setShowAddPolaroidModal(true)}
+                      className="px-3 py-1.5 rounded-xl bg-[#D4FF00] text-black font-extrabold text-xs"
+                    >
+                      + Polaroid
+                    </button>
+                  </div>
+
+                  {scrapbook.length === 0 ? (
+                    <div className="text-center py-10 px-4 bg-[#1B0A30] rounded-3xl border border-dashed border-neutral-700">
+                      <p className="text-3xl mb-2">📸</p>
+                      <p className="text-sm font-bold text-white">No Polaroids Snapped Yet</p>
+                      <button
+                        onClick={() => setShowAddPolaroidModal(true)}
+                        className="mt-3 px-4 py-2 rounded-xl bg-[#D4FF00] text-black font-black text-xs"
+                      >
+                        + Snap First Polaroid
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {scrapbook.map(item => (
+                        <div key={item.id} className="bg-neutral-100 text-neutral-900 p-3.5 rounded-2xl shadow-xl border-4 border-white">
+                          <div className="relative aspect-[4/3] rounded-lg overflow-hidden bg-neutral-800">
+                            <img src={item.image} className="w-full h-full object-cover" />
+                            <div className="absolute top-2 left-2 bg-black/60 px-2 py-0.5 rounded text-[10px] text-white font-mono">
+                              📍 {item.location}
+                            </div>
+                          </div>
+                          <div className="pt-3 pb-1 px-1">
+                            <p className="text-xs font-serif italic text-neutral-800 font-medium">"{item.caption}"</p>
+                            <div className="flex items-center justify-between mt-2 pt-2 border-t border-neutral-300 text-[10px] text-neutral-500 font-mono">
+                              <span className="font-bold text-neutral-700">Snapped by {item.author}</span>
+                              <span>❤️ {item.likes}</span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* TAB 5: PROFILE & SYNC SETTINGS */}
+              {activeTab === 'profile' && (
+                <div className="space-y-4">
+                  <div className="bg-[#1C0A34] rounded-3xl p-4 border border-[#371663] text-center">
+                    <div className="w-20 h-20 mx-auto rounded-3xl p-1 bg-gradient-to-tr from-[#D4FF00] to-[#FF3B30] mb-2">
+                      <img src={memberProfile.avatar || AVATAR_PRESETS[0]} className="w-full h-full object-cover rounded-[20px]" />
+                    </div>
+                    <h2 className="text-base font-black text-white">{memberProfile.name || 'Insha'} • {memberProfile.handle || '@inshaa'}</h2>
+                    <p className="text-xs text-[#FEF08A]">{memberProfile.role}</p>
+                    <div className="mt-3 flex justify-center gap-2">
+                      <button
+                        onClick={() => setShowIdentityModal(true)}
+                        className="px-3 py-1.5 rounded-full bg-[#2A1149] border border-[#D4FF00]/40 text-[#D4FF00] text-[11px] font-bold"
+                      >
+                        ✏️ Edit Profile
+                      </button>
+                      <button
+                        onClick={() => setShowSyncModal(true)}
+                        className="px-3 py-1.5 rounded-full bg-[#2A1149] border border-[#A3E635]/40 text-[#A3E635] text-[11px] font-bold"
+                      >
+                        🔄 Room Sync (#{circleCode})
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="bg-[#18082D] rounded-3xl p-4 border border-[#2F1256] space-y-3">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-400">Live Circle Notifications</h3>
+                    <div className="flex items-center justify-between py-1">
+                      <div>
+                        <p className="text-xs font-bold text-white">Browser Push Alerts</p>
+                        <p className="text-[10px] text-neutral-400">Ping phone when friends drop tea</p>
+                      </div>
+                      <button
+                        onClick={() => {
+                          if ('Notification' in window) Notification.requestPermission();
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-[#D4FF00] text-black text-[10px] font-black"
+                      >
+                        ENABLE 🔔
+                      </button>
+                    </div>
+                    <div className="flex items-center justify-between py-1 border-t border-neutral-800 pt-2">
+                      <div>
+                        <p className="text-xs font-bold text-white">Share Room Link</p>
+                        <p className="text-[10px] text-neutral-400">Friends auto-join #{circleCode}</p>
+                      </div>
+                      <button
+                        onClick={copyShareLink}
+                        className="px-3 py-1.5 rounded-xl bg-[#270F45] text-[#A3E635] text-xs font-bold border border-[#A3E635]/30"
+                      >
+                        🔗 Copy Link
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* BOTTOM NAV */}
+            <nav className="absolute bottom-0 left-0 right-0 h-20 bg-[#120621]/95 backdrop-blur-xl border-t border-[#29104A] px-2 flex items-center justify-around z-20">
+              <button onClick={() => setActiveTab('archive')} className={`flex flex-col items-center gap-1 ${activeTab === 'archive' ? 'text-[#D4FF00]' : 'text-neutral-400'}`}>
+                <span className="text-lg">📂</span>
+                <span className="text-[10px] font-bold">Archive</span>
+              </button>
+              <button onClick={() => setActiveTab('characters')} className={`flex flex-col items-center gap-1 ${activeTab === 'characters' ? 'text-[#D4FF00]' : 'text-neutral-400'}`}>
+                <span className="text-lg">🕵️‍♀️</span>
+                <span className="text-[10px] font-bold">Cast</span>
+              </button>
+              <button onClick={() => setActiveTab('drop')} className="flex flex-col items-center -mt-6">
+                <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-[#D4FF00] to-[#A3E635] text-black flex items-center justify-center text-2xl shadow-xl">
+                  🫖
+                </div>
+                <span className="text-[10px] font-black text-[#D4FF00] mt-1">Drop Tea</span>
+              </button>
+              <button onClick={() => setActiveTab('scrapbook')} className={`flex flex-col items-center gap-1 ${activeTab === 'scrapbook' ? 'text-[#D4FF00]' : 'text-neutral-400'}`}>
+                <span className="text-lg">📸</span>
+                <span className="text-[10px] font-bold">Scrapbook</span>
+              </button>
+              <button onClick={() => setActiveTab('profile')} className={`flex flex-col items-center gap-1 ${activeTab === 'profile' ? 'text-[#D4FF00]' : 'text-neutral-400'}`}>
+                <span className="text-lg">👤</span>
+                <span className="text-[10px] font-bold">Profile</span>
+              </button>
+            </nav>
+
+            {/* MODAL: ROOM SYNC CONFIG */}
+            {showSyncModal && (
+              <div className="absolute inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+                <div className="bg-[#1C0A33] border-2 border-[#A3E635] rounded-3xl p-5 w-full max-w-sm">
+                  <div className="flex justify-between items-center pb-2 border-b border-neutral-800">
+                    <h3 className="text-sm font-black text-white">🔄 Live Circle Room Sync</h3>
+                    <button onClick={() => setShowSyncModal(false)} className="text-neutral-400">✕</button>
+                  </div>
+                  <p className="text-[11px] text-neutral-300 mt-2">
+                    Everyone using the same <strong>Circle Room Code</strong> sees live posts, suspects, and notifications across phones automatically.
+                  </p>
+                  <div className="mt-3">
+                    <label className="text-[10px] font-bold text-[#D4FF00] uppercase">Shared Circle Room Code</label>
+                    <input
+                      type="text"
+                      value={circleCode}
+                      onChange={(e) => setCircleCode(e.target.value)}
+                      className="w-full bg-[#120622] border border-[#3A1667] rounded-xl px-3 py-2 text-xs text-white font-mono mt-1"
+                    />
+                  </div>
+                  <div className="mt-3">
+                    <label className="text-[10px] font-bold text-neutral-400 uppercase">Optional: Firebase Realtime DB URL</label>
+                    <input
+                      type="url"
+                      placeholder="https://your-project-default-rtdb.firebaseio.com"
+                      value={firebaseDbUrl}
+                      onChange={(e) => {
+                        setFirebaseDbUrl(e.target.value);
+                        localStorage.setItem('tea_fb_url', e.target.value);
+                      }}
+                      className="w-full bg-[#120622] border border-[#3A1667] rounded-xl px-3 py-2 text-xs text-white mt-1"
+                    />
+                  </div>
+                  <div className="mt-4 flex gap-2">
+                    <button
+                      onClick={copyShareLink}
+                      className="flex-1 py-2.5 rounded-xl bg-[#270F45] border border-[#A3E635] text-[#A3E635] font-bold text-xs"
+                    >
+                      🔗 Copy Invite Link
+                    </button>
+                    <button
+                      onClick={() => setShowSyncModal(false)}
+                      className="flex-1 py-2.5 rounded-xl bg-[#D4FF00] text-black font-black text-xs"
+                    >
+                      Save & Sync
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* MODAL: IDENTITY */}
+            {showIdentityModal && (
+              <div className="absolute inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+                <div className="bg-[#1C0A33] border-2 border-[#D4FF00] rounded-3xl p-5 w-full max-w-sm">
+                  <h3 className="text-base font-black text-white">Join Circle #{circleCode} 🫖</h3>
+                  <p className="text-xs text-neutral-400 mt-0.5">Set your name so your friends get notified when you drop tea.</p>
+                  <form onSubmit={handleSaveIdentity} className="mt-4 space-y-3">
+                    <input
+                      type="text"
+                      placeholder="Your Name (e.g. Insha) *"
+                      value={memberProfile.name}
+                      onChange={(e) => setMemberProfile({ ...memberProfile, name: e.target.value })}
+                      required
+                      className="w-full bg-[#120622] border border-[#3A1667] rounded-xl px-3 py-2 text-xs text-white"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Handle (e.g. @inshaa)"
+                      value={memberProfile.handle}
+                      onChange={(e) => setMemberProfile({ ...memberProfile, handle: e.target.value })}
+                      className="w-full bg-[#120622] border border-[#3A1667] rounded-xl px-3 py-2 text-xs text-white"
+                    />
+                    <div className="flex gap-2 overflow-x-auto py-1">
+                      {AVATAR_PRESETS.map((url, i) => (
+                        <img
+                          key={i}
+                          src={url}
+                          onClick={() => setMemberProfile({ ...memberProfile, avatar: url })}
+                          className={`w-11 h-11 rounded-xl object-cover cursor-pointer border-2 ${memberProfile.avatar === url ? 'border-[#D4FF00]' : 'border-transparent opacity-50'}`}
+                        />
+                      ))}
+                    </div>
+                    <button type="submit" className="w-full py-3 rounded-xl bg-[#D4FF00] text-black font-black text-xs">
+                      Enter Live Vault →
+                    </button>
+                  </form>
+                </div>
+              </div>
+            )}
+
+            {/* MODAL: ADD SUSPECT */}
+            {showAddSuspectModal && (
+              <div className="absolute inset-0 z-50 bg-black/85 backdrop-blur-md flex items-end">
+                <div className="bg-[#1C0A33] border-t-2 border-[#D4FF00] rounded-t-3xl p-5 w-full">
+                  <div className="flex justify-between items-center pb-2 border-b border-neutral-800">
+                    <h3 className="text-sm font-black text-white">Induct New Suspect 🕵️‍♀️</h3>
+                    <button onClick={() => setShowAddSuspectModal(false)} className="text-neutral-400">✕</button>
+                  </div>
+                  <form onSubmit={handleAddSuspect} className="mt-3 space-y-3">
+                    <div className="grid grid-cols-2 gap-2">
+                      <input type="text" placeholder="Suspect Name *" value={newCharName} onChange={(e) => setNewCharName(e.target.value)} required className="bg-[#120622] border border-[#3A1667] rounded-xl px-3 py-2 text-xs text-white" />
+                      <input type="text" placeholder="Nickname" value={newCharNickname} onChange={(e) => setNewCharNickname(e.target.value)} className="bg-[#120622] border border-[#3A1667] rounded-xl px-3 py-2 text-xs text-white" />
+                    </div>
+                    <textarea rows={2} placeholder="Psych evaluation..." value={newCharBio} onChange={(e) => setNewCharBio(e.target.value)} className="w-full bg-[#120622] border border-[#3A1667] rounded-xl p-2.5 text-xs text-white" />
+                    <input type="text" placeholder="Signature Quote..." value={newCharQuote} onChange={(e) => setNewCharQuote(e.target.value)} className="w-full bg-[#120622] border border-[#3A1667] rounded-xl px-3 py-2 text-xs text-white" />
+                    <button type="submit" className="w-full py-3 rounded-xl bg-[#D4FF00] text-black font-black text-xs">Save & Sync Suspect</button>
+                  </form>
+                </div>
+              </div>
+            )}
+
+            {/* MODAL: ADD VAULT */}
+            {showAddFolderModal && (
+              <div className="absolute inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+                <div className="bg-[#1C0A33] border-2 border-[#D4FF00] rounded-3xl p-5 w-full max-w-sm">
+                  <div className="flex justify-between items-center pb-2 border-b border-neutral-800">
+                    <h3 className="text-sm font-black text-white">Create Shared Vault 📂</h3>
+                    <button onClick={() => setShowAddFolderModal(false)} className="text-neutral-400">✕</button>
+                  </div>
+                  <form onSubmit={handleAddFolder} className="mt-3 space-y-3">
+                    <input type="text" placeholder="Vault Name *" value={newFolderName} onChange={(e) => setNewFolderName(e.target.value)} required className="w-full bg-[#120622] border border-[#3A1667] rounded-xl px-3 py-2 text-xs text-white" />
+                    <button type="submit" className="w-full py-3 rounded-xl bg-[#D4FF00] text-black font-black text-xs">Create & Sync Vault</button>
+                  </form>
+                </div>
+              </div>
+            )}
+
+            {/* MODAL: ADD POLAROID */}
+            {showAddPolaroidModal && (
+              <div className="absolute inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+                <div className="bg-[#1C0A33] border-2 border-[#D4FF00] rounded-3xl p-5 w-full max-w-sm">
+                  <div className="flex justify-between items-center pb-2 border-b border-neutral-800">
+                    <h3 className="text-sm font-black text-white">Snap Polaroid 📸</h3>
+                    <button onClick={() => setShowAddPolaroidModal(false)} className="text-neutral-400">✕</button>
+                  </div>
+                  <form onSubmit={handleAddPolaroid} className="mt-3 space-y-3">
+                    <input type="url" placeholder="Image URL..." value={newSnapImage} onChange={(e) => setNewSnapImage(e.target.value)} className="w-full bg-[#120622] border border-[#3A1667] rounded-xl px-3 py-2 text-xs text-white" />
+                    <input type="text" placeholder="Caption *" value={newSnapCaption} onChange={(e) => setNewSnapCaption(e.target.value)} required className="w-full bg-[#120622] border border-[#3A1667] rounded-xl px-3 py-2 text-xs text-white" />
+                    <input type="text" placeholder="Location" value={newSnapLocation} onChange={(e) => setNewSnapLocation(e.target.value)} className="w-full bg-[#120622] border border-[#3A1667] rounded-xl px-3 py-2 text-xs text-white" />
+                    <button type="submit" className="w-full py-3 rounded-xl bg-[#D4FF00] text-black font-black text-xs">Pin & Sync Polaroid</button>
+                  </form>
+                </div>
+              </div>
+            )}
+
+          </main>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
